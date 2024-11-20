@@ -20,7 +20,8 @@ model = YOLO(MODEL_PATH)
 
 origins = [
     "http://localhost:4200",
-    "http://127.0.0.1:4200"# Dirección de tu frontend
+    "http://127.0.0.1:4200",
+    "https://ldzcc7vk-4200.brs.devtunnels.ms"# Dirección de tu frontend
 ]
 
 app.add_middleware(
