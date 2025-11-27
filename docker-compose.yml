@@ -1,0 +1,8 @@
+version: "3.0"
+services:
+  back_maiz:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
