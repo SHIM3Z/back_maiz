@@ -5,8 +5,7 @@ import numpy as np
 from fastapi import HTTPException
 
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
-from io import BytesIO
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 import base64
 
@@ -16,11 +15,21 @@ from ultralytics import YOLO
 app = FastAPI()
 
 MODEL_PATH = "runs/segment/train/weights/best.pt"  # Actualiza con la ruta de tu modelo
-model = YOLO(MODEL_PATH)
+
+# Cargar modelo de forma lazy para evitar timeout en inicio
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        print("🔄 Cargando modelo YOLO por primera vez...")
+        model = YOLO(MODEL_PATH)
+        print("✅ Modelo YOLO cargado exitosamente en memoria")
+    else:
+        print("♻️ Reutilizando modelo YOLO ya cargado (no se recarga)")
+    return model
 
 origins = [
-    "http://localhost:4200",
-    "http://127.0.0.1:4200",
     "https://front-maiz.onrender.com"# Dirección de tu frontend
 ]
 
@@ -34,46 +43,25 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"status": "ok"}
 
-
-# @app.post("/process_image/")
-# async def process_image(file: UploadFile = File(...)):
-#     # Verifica si se recibe un archivo
-#     if not file:
-#         return JSONResponse(content={"error": "No file provided"}, status_code=400)
-#
-#     # Lee la imagen desde el archivo subido
-#     try:
-#         image_data = await file.read()
-#         image = Image.open(BytesIO(image_data))
-#
-#         # Procesa la imagen (ejemplo: convierte a escala de grises)
-#         image = image.convert("L")
-#
-#         # Guarda la imagen procesada en memoria en formato PNG
-#         buffered = BytesIO()
-#         image.save(buffered, format="PNG")
-#
-#         # Codifica la imagen procesada a base64 para enviarla en formato JSON
-#         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-#
-#         # Devuelve la imagen en formato JSON
-#         return JSONResponse(content={"image": img_str})
-#
-#     except Exception as e:
-#         return JSONResponse(content={"error": str(e)}, status_code=400)
-
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
 
 @app.post("/process_image/")
 async def process_image(file: UploadFile = File(...)):
     try:
+        import time
+        start_time = time.time()
+
         # Leer la imagen del archivo
         image_bytes = await file.read()
         image = Image.open(io.BytesIO(image_bytes))
 
         # Realizar la predicción
-        results = model.predict(image, conf=0.6)[0]  # Asegúrate de que 'model' esté definido
+        current_model = get_model()
+        results = current_model.predict(image, conf=0.6)[0]
 
         # Procesar la imagen anotada y convertirla al esquema de color RGB
         annotated_image = results.plot()  # Esto devuelve un array NumPy
@@ -84,14 +72,70 @@ async def process_image(file: UploadFile = File(...)):
 
         # Guardar la imagen en un buffer en formato JPEG
         buffered = io.BytesIO()
-        annotated_image.save(buffered, format="JPEG")
+        annotated_image.save(buffered, format="JPEG", quality=85)
         buffered.seek(0)
 
         # Convertir a Base64 para enviarlo al frontend
         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        print(f"imagen: {img_str}")
 
-        return JSONResponse(content={"image": img_str})
+        # Extraer metadata de las detecciones
+        num_detections = 0
+        if hasattr(results, 'boxes') and results.boxes is not None:
+            num_detections = len(results.boxes)
+
+        processing_time = round(time.time() - start_time, 2)
+
+        print(f"✅ Imagen procesada: {num_detections} detecciones en {processing_time}s")
+
+        return JSONResponse(content={
+            "image": img_str,
+            "detections": num_detections,
+            "processing_time_seconds": processing_time,
+            "model_confidence_threshold": 0.6
+        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al procesar la imagen: {str(e)}")
+
+
+# Endpoint alternativo: Devuelve imagen binaria directa (más eficiente, -33% de tamaño)
+@app.post("/process_image/binary")
+async def process_image_binary(file: UploadFile = File(...)):
+    """
+    Endpoint alternativo que devuelve la imagen procesada como binario JPEG.
+    Ventajas: 33% más pequeño, más rápido.
+    Desventajas: No incluye metadata adicional.
+    """
+    try:
+        # Leer la imagen del archivo
+        image_bytes = await file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+
+        # Realizar la predicción
+        current_model = get_model()
+        results = current_model.predict(image, conf=0.6)[0]
+
+        # Procesar la imagen anotada
+        annotated_image = results.plot()
+        annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
+        annotated_image = Image.fromarray(np.uint8(annotated_image)).convert("RGB")
+
+        # Guardar en buffer
+        buffered = io.BytesIO()
+        annotated_image.save(buffered, format="JPEG", quality=85)
+        buffered.seek(0)
+
+        print(f"✅ Imagen procesada (binario)")
+
+        # Devolver imagen binaria directamente
+        return StreamingResponse(
+            buffered,
+            media_type="image/jpeg",
+            headers={
+                "Content-Disposition": "inline; filename=processed_image.jpg",
+                "X-Detections": str(len(results.boxes) if hasattr(results, 'boxes') and results.boxes is not None else 0)
+            }
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al procesar la imagen: {str(e)}")

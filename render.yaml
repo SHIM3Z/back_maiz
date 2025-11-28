@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: back-maiz
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    plan: free
+    region: oregon  # Puedes cambiarlo a: frankfurt, oregon, singapore
+
