@@ -30,6 +30,7 @@ def get_model():
     return model
 
 origins = [
+    "https://meek-treacle-22684b.netlify.app/",
     "https://front-maiz.onrender.com"# Dirección de tu frontend
 ]
 
