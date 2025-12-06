@@ -49,7 +49,7 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-@app.post("/process_image/")
+@app.post("/process_image")
 async def process_image(file: UploadFile = File(...)):
     try:
         import time
